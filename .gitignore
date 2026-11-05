@@ -1,0 +1,35 @@
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Credentials & sessions (NEVER COMMIT)
+.env
+*.session
+*.session-journal
+
+# Media & temporary processing files
+*.mp4
+*.part.*
+*.trf
+*.mkv
+*.avi
+*.mov
+*.webm
+*.png
+*.jpg
+*.jpeg
+
+# Local agent scratch & logs
+.agents/
+.gemini/
