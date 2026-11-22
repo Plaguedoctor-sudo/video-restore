@@ -66,6 +66,11 @@ def run(
     scale_height: int | None = typer.Option(None, "--height", help="Downscale height (e.g. 720)"),
     threads: int | None = typer.Option(None, "--threads", help="Number of worker threads"),
     fast: bool = typer.Option(False, "--fast", help="Optimized fast mode for CPU rendering"),
+    chunk_duration: float | None = typer.Option(180.0, "--chunk-duration", help="Chunk duration in seconds (default 180s)"),
+    no_chunk: bool = typer.Option(False, "--no-chunk", help="Disable chunked rendering"),
+    resume: bool = typer.Option(False, "--resume", help="Resume an interrupted restoration job"),
+    keep_chunks: bool = typer.Option(False, "--keep-chunks", help="Retain intermediate chunks after completion"),
+    work_dir: Path | None = typer.Option(None, "--work-dir", help="Directory for temporary chunk storage"),
     moire: float | None = None,
     force: bool = False,
 ) -> None:
@@ -89,7 +94,7 @@ def run(
             from .capabilities import has_qsv
             if not has_qsv():
                 encoder = Encoder.X264
-        if scale_height is None and info.height > 720:
+        if scale_height is None and info.height > 720 and screen:
             scale_height = 720
         typer.secho("  fast mode enabled -> multi-core x264/fast preset", fg="green")
     elif tg:
@@ -115,7 +120,7 @@ def run(
                             fg="yellow")
         if q is not None:
             geometry = q.as_filter()
-            cropf = f"crop={q.bbox()[2]}:{q.bbox()[3]}:{q.bbox()[0]}:{q.bbox()[1]}"
+            cropf = scr.parse_crop(crop) if crop else None
         elif crop:
             cropf = scr.parse_crop(crop)
         m = moire if moire is not None else scr.moire_score(info)
@@ -124,20 +129,33 @@ def run(
     else:
         m, b = 0.0, 0.0
 
-    cfg = Config(source=src, output=output, preset=preset, encoder=encoder,
-                 denoise_strength=denoise, sharpen=sharpen, tonal=tonal,
-                 audio_denoise=audio_denoise if audio_denoise is not None else tg,
-                 threads=active_threads,
-                 sample_start=start, sample_duration=duration, force=force,
-                 screen_mode=screen, quad=quad, crop=crop, moire=m,
-                 scale_height=scale_height)
-    _guard(cfg)
-
     profile = analyze(info)
     print("Defects:")
     print(profile.summary())
+
+    effective_audio_denoise = audio_denoise
+    if effective_audio_denoise is None:
+        effective_audio_denoise = tg or profile.hiss > 0.25
+        if profile.hiss > 0.25 and not tg:
+            typer.secho(f"  audio hiss detected ({profile.hiss:.2f}) -> audio denoise enabled", fg="yellow")
+
+    effective_chunk_duration = None if no_chunk else chunk_duration
+    cfg = Config(source=src, output=output, preset=preset, encoder=encoder,
+                 denoise_strength=denoise, sharpen=sharpen, tonal=tonal,
+                 audio_denoise=effective_audio_denoise,
+                 threads=active_threads,
+                 sample_start=start, sample_duration=duration, force=force,
+                 screen_mode=screen, quad=quad, crop=crop, moire=m,
+                 scale_height=scale_height,
+                 chunk_duration=effective_chunk_duration,
+                 resume=resume,
+                 keep_chunks=keep_chunks,
+                 work_dir=work_dir)
+    _guard(cfg)
+
     plan = build_plan(profile, preset.value, denoise, sharpen, tonal,
                       telegram=tg, video_note=note,
+                      audio_denoise=effective_audio_denoise,
                       geometry=geometry, crop=cropf, moire=m, bands=b)
     print(f"Graph: {plan.graph()}")
     try:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import uuid
@@ -63,6 +64,16 @@ class JobInfo:
 JOBS: dict[str, JobInfo] = {}
 
 
+def _storage_root() -> Path:
+    env_dir = os.environ.get("VR_STORAGE_DIR")
+    if env_dir:
+        base = Path(env_dir)
+    else:
+        base = Path.home() / ".cache" / "video-restore" / "web_jobs"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index() -> str:
     return (Path(__file__).parent.parent / "static" / "index.html").read_text()
@@ -71,7 +82,8 @@ def index() -> str:
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)) -> UploadResponse:
     job_id = uuid.uuid4().hex[:8]
-    d = Path(tempfile.mkdtemp(prefix="vr_"))
+    d = _storage_root() / f"job_{job_id}"
+    d.mkdir(parents=True, exist_ok=True)
     src = d / (file.filename or "in.mp4")
     with src.open("wb") as fh:
         shutil.copyfileobj(file.file, fh)
@@ -112,7 +124,13 @@ def _run_render_job(job_id: str, preset_name: str) -> None:
     try:
         info = probe(job.src)
         plan = build_plan(job.profile, preset_name)
-        cfg = Config(source=job.src, output=job.out, preset=Preset(preset_name), force=True)
+        cfg = Config(
+            source=job.src,
+            output=job.out,
+            preset=Preset(preset_name),
+            force=True,
+            work_dir=job.src.parent / "staging",
+        )
         render(cfg, plan, info, progress_callback=on_progress)
         job.status = "done"
         job.progress = 100.0

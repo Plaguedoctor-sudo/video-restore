@@ -45,6 +45,10 @@ class Config:
     crop: str | None = None
     moire: float | None = None
     scale_height: int | None = None
+    chunk_duration: float | None = 180.0
+    resume: bool = False
+    keep_chunks: bool = False
+    work_dir: Path | None = None
 
     def with_(self, **kw) -> "Config":
         return replace(self, **kw)

@@ -4,7 +4,15 @@ from unittest.mock import patch
 from restore.config import Config, Encoder, Preset
 from restore.plan import Plan
 from restore.probe import MediaInfo
-from restore.pipeline import _audio_args, _base, _encoder_args, compute_metric
+from restore.pipeline import (
+    JobManifest,
+    _audio_args,
+    _base,
+    _encoder_args,
+    compute_metric,
+    concat_chunks,
+    split_chunks,
+)
 
 
 def test_base_command_construction():
@@ -106,3 +114,76 @@ def test_compute_metric_failure():
         mock_run.return_value.returncode = 1
         mock_run.return_value.stderr = "error"
         assert compute_metric(Path("src.mp4"), Path("out.mp4"), "ssim") is None
+
+
+def test_job_manifest_save_and_load(tmp_path: Path):
+    m_file = tmp_path / "manifest.json"
+    manifest = JobManifest(
+        source="in.mp4",
+        output="out.mp4",
+        total_chunks=2,
+        chunk_duration=180.0,
+        chunks=[
+            {"index": 0, "source": "chunk_0000.mp4", "output": "rendered_0000.mp4", "status": "done"},
+            {"index": 1, "source": "chunk_0001.mp4", "output": "rendered_0001.mp4", "status": "pending"},
+        ],
+    )
+    manifest.save(m_file)
+    assert m_file.exists()
+
+    loaded = JobManifest.load(m_file)
+    assert loaded is not None
+    assert loaded.total_chunks == 2
+    assert loaded.chunks[0]["status"] == "done"
+    assert loaded.chunks[1]["status"] == "pending"
+
+
+def test_plan_triggers_audio_denoise_in_pipeline():
+    cfg = Config(source=Path("in.mp4"), output=Path("out.mp4"), audio_denoise=False)
+    info_with_audio = MediaInfo(
+        path=Path("in.mp4"),
+        width=1280,
+        height=720,
+        fps=30.0,
+        duration=10.0,
+        video_codec="h264",
+        has_audio=True,
+    )
+    plan_with_audio = Plan(filters=(), stabilize=False, notes=(), audio_denoise=True)
+    audio_args = _audio_args(cfg, info_with_audio, plan=plan_with_audio)
+    assert "-af" in audio_args
+    assert any("afftdn" in a for a in audio_args)
+
+
+def test_split_and_concat_chunks_roundtrip(tmp_path: Path):
+    import subprocess
+    from restore.probe import probe
+
+    src = tmp_path / "test_synth.mp4"
+    # Create 6-second synthetic test video with GOP=15 (0.5s keyframes)
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error",
+        "-f", "lavfi", "-i", "testsrc=duration=6:size=160x120:rate=30",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+        "-c:v", "libx264", "-g", "15", "-c:a", "aac", str(src)
+    ], check=True)
+
+    staging = tmp_path / "staging"
+    chunks = split_chunks(src, staging, segment_time=2.0)
+    assert len(chunks) >= 2
+
+    # Verify each chunk is valid
+    for c in chunks:
+        c_info = probe(c)
+        assert c_info.width == 160
+        assert c_info.height == 120
+        assert c_info.duration > 0.5
+
+    out = tmp_path / "stitched.mp4"
+    concat_chunks(chunks, out)
+    assert out.exists()
+
+    out_info = probe(out)
+    assert out_info.width == 160
+    assert out_info.height == 120
+    assert abs(out_info.duration - 6.0) < 0.5

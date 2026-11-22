@@ -60,3 +60,15 @@ def test_telegram_keeps_nlmeans_low():
 def test_video_note_disables_stabilization():
     p = DefectProfile(0.9, 0.4, 0.4, 0, 0, 0, 0, 0.4)
     assert not build_plan(p, "telegram", telegram=True, video_note=True).stabilize
+
+
+def test_audio_hiss_triggers_audio_denoise_in_plan():
+    # Hiss below threshold (clean audio)
+    p_clean = DefectProfile(0, 0, 0, 0, 0, 0, 0, 0, hiss=0.10)
+    assert not build_plan(p_clean, "standard").audio_denoise
+
+    # Severe hiss above threshold (D8 defect)
+    p_hiss = DefectProfile(0, 0, 0, 0, 0, 0, 0, 0, hiss=0.45)
+    plan = build_plan(p_hiss, "standard")
+    assert plan.audio_denoise is True
+    assert any("audio denoise afftdn" in note for note in plan.notes)

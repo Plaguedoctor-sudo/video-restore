@@ -11,9 +11,11 @@ class Plan:
     filters: tuple[str, ...]
     stabilize: bool
     notes: tuple[str, ...]
+    audio_denoise: bool = False
 
     def graph(self) -> str:
-        return ",".join(self.filters) + ",format=yuv420p,setsar=1"
+        parts = [f for f in self.filters if f] + ["format=yuv420p", "setsar=1"]
+        return ",".join(parts)
 
 
 def build_plan(
@@ -35,6 +37,10 @@ def build_plan(
     pv: PresetValues = PRESETS[preset]
     f: list[str] = []
     notes: list[str] = []
+
+    audio_needed = audio_denoise or profile.hiss > 0.25
+    if audio_needed:
+        notes.append(f"audio denoise afftdn (hiss={profile.hiss:.2f})")
 
     # S1 geometry first, always
     if geometry:
@@ -115,4 +121,4 @@ def build_plan(
 
     f.extend(extra)
     return Plan(tuple(f), stabilize=profile.shake > 0.12 and not video_note,
-                notes=tuple(notes))
+                notes=tuple(notes), audio_denoise=audio_needed)

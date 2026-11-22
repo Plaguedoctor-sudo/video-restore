@@ -10,6 +10,9 @@ def test_quad_filter_shape():
     q = Quad(((10, 20), (300, 20), (300, 200), (10, 200)))
     f = q.as_filter()
     assert f.startswith("perspective=") and "sense=source" in f
+    # ffmpeg perspective requires x2,y2 to be BL and x3,y3 to be BR
+    assert "x2=10:y2=200" in f
+    assert "x3=300:y3=200" in f
 
 
 def test_bbox():
@@ -56,3 +59,22 @@ def test_largest_quad_detection():
     quad = _largest_quad(img)
     assert quad is not None
     assert len(quad) == 4
+
+
+def test_moire_score_with_pattern():
+    from pathlib import Path
+    from unittest.mock import patch
+    from restore.probe import MediaInfo
+    from restore.screen import moire_score
+
+    info = MediaInfo(Path("test.mp4"), 320, 240, 30.0, 10.0, "h264", False)
+    # Synthetic high-frequency striped pattern (moiré / interference)
+    x = np.arange(320)
+    y = np.arange(240)
+    xx, yy = np.meshgrid(x, y)
+    pattern = (np.sin(xx * 0.8) * np.cos(yy * 0.8) * 127 + 128).astype(np.uint8)
+    bgr_pattern = cv2.cvtColor(pattern, cv2.COLOR_GRAY2BGR)
+
+    with patch("restore.screen._frame_at", return_value=bgr_pattern):
+        score = moire_score(info)
+        assert score > 0.15

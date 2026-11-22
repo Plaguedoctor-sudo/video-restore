@@ -16,10 +16,10 @@ class Quad:
     pts: tuple[tuple[int, int], ...]
 
     def as_filter(self) -> str:
-        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = self.pts
+        tl, tr, br, bl = self.pts
         return (
-            f"perspective=x0={x0}:y0={y0}:x1={x1}:y1={y1}"
-            f":x2={x2}:y2={y2}:x3={x3}:y3={y3}:sense=source:eval=init"
+            f"perspective=x0={tl[0]}:y0={tl[1]}:x1={tr[0]}:y1={tr[1]}"
+            f":x2={bl[0]}:y2={bl[1]}:x3={br[0]}:y3={br[1]}:sense=source:eval=init"
         )
 
     def bbox(self) -> tuple[int, int, int, int]:
@@ -116,7 +116,31 @@ def band_score(info: MediaInfo, samples: int = 24) -> float:
 
 
 def moire_score(info: MediaInfo) -> float:
-    """High-frequency band energy in a mid clip frame."""
+    """High-frequency band energy across sampled keyframes."""
+    if info.duration <= 0:
+        return 0.0
+    timestamps = [info.duration * 0.25, info.duration * 0.5, info.duration * 0.75]
+    scores: list[float] = []
+    for ts in timestamps:
+        frame = _frame_at(info, ts)
+        if frame is None:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        if float(gray.mean()) < 12.0 or float(gray.mean()) > 243.0:
+            continue
+        f = np.fft.fftshift(np.abs(np.fft.fft2(gray)))
+        h, w = f.shape
+        cy, cx, r = h // 2, w // 2, min(h, w) // 2
+        if r < 2:
+            continue
+        yy, xx = np.ogrid[:h, :w]
+        dist = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2) / float(r)
+        hi = f[(dist > 0.35) & (dist < 0.95)].mean()
+        mid = f[(dist > 0.05) & (dist < 0.35)].mean()
+        scores.append(float(np.clip((hi / (mid + 1e-6)) * 1.4, 0.0, 1.0)))
+    if scores:
+        return max(scores)
+    # Fallback to single frame at 0.5 if all windows were blank
     frame = _frame_at(info, info.duration * 0.5)
     if frame is None:
         return 0.0
@@ -125,7 +149,7 @@ def moire_score(info: MediaInfo) -> float:
     h, w = f.shape
     cy, cx, r = h // 2, w // 2, min(h, w) // 2
     yy, xx = np.ogrid[:h, :w]
-    dist = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2) / r
+    dist = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2) / max(r, 1)
     hi = f[(dist > 0.35) & (dist < 0.95)].mean()
     mid = f[(dist > 0.05) & (dist < 0.35)].mean()
     return float(np.clip((hi / (mid + 1e-6)) * 1.4, 0.0, 1.0))
