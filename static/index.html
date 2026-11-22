@@ -290,7 +290,7 @@
       <div>
         <h3 id="render-title" style="margin:0;">Restoring Video</h3>
         <div id="progress-text" style="color:var(--muted); font-size:0.95rem; margin-top:0.3rem;">
-          Executing ffmpeg filter pipeline...
+          Initializing ffmpeg pipeline...
         </div>
       </div>
       <div id="progress-pct" class="progress-pct-badge">0.0%</div>
@@ -300,9 +300,33 @@
       <div id="progress" class="progress-bar"></div>
     </div>
 
-    <div id="render-sub" style="font-size:0.85rem; color:var(--muted); display:flex; justify-content:space-between;">
+    <!-- Live Metrics Grid: Frames, Time, Speed -->
+    <div class="stats-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin: 1rem 0;">
+      <div style="background:#0e121d; border:1px solid var(--border); border-radius:8px; padding:0.75rem; text-align:center;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:600; letter-spacing:0.04em;">Frames Done</div>
+        <div id="stat-frames-done" style="font-size:1.35rem; font-weight:700; color:#38bdf8; margin-top:0.2rem;">0</div>
+      </div>
+      <div style="background:#0e121d; border:1px solid var(--border); border-radius:8px; padding:0.75rem; text-align:center;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:600; letter-spacing:0.04em;">Total Frames</div>
+        <div id="stat-total-frames" style="font-size:1.35rem; font-weight:700; color:var(--text); margin-top:0.2rem;">--</div>
+      </div>
+      <div style="background:#0e121d; border:1px solid var(--border); border-radius:8px; padding:0.75rem; text-align:center;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:600; letter-spacing:0.04em;">Total Time Required</div>
+        <div id="stat-total-time" style="font-size:1.35rem; font-weight:700; color:#a78bfa; margin-top:0.2rem;">--</div>
+      </div>
+      <div style="background:#0e121d; border:1px solid var(--border); border-radius:8px; padding:0.75rem; text-align:center;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:600; letter-spacing:0.04em;">Time Remaining</div>
+        <div id="stat-eta" style="font-size:1.35rem; font-weight:700; color:var(--success); margin-top:0.2rem;">--</div>
+      </div>
+      <div style="background:#0e121d; border:1px solid var(--border); border-radius:8px; padding:0.75rem; text-align:center;">
+        <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; font-weight:600; letter-spacing:0.04em;">Processing Speed</div>
+        <div id="stat-fps" style="font-size:1.35rem; font-weight:700; color:#fbbf24; margin-top:0.2rem;">-- fps</div>
+      </div>
+    </div>
+
+    <div id="render-sub" style="font-size:0.85rem; color:var(--muted); display:flex; justify-content:space-between; align-items:center;">
       <span id="render-stage-text">Multi-stage filtering & encoding in progress</span>
-      <span>Live Pipeline Tracker</span>
+      <span id="render-elapsed-text" style="color:#64748b;">Elapsed: 0s</span>
     </div>
     <div id="render-err" style="color:var(--err); margin-top:0.75rem; font-weight:600;"></div>
   </div>
@@ -413,6 +437,22 @@ function uploadClip() {
   xhr.send(fd);
 }
 
+function formatTime(sec) {
+  if (!sec || sec <= 0) return "0s";
+  const s = Math.round(sec);
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return `${h}h ${remM}m ${remS}s`;
+  }
+  if (m > 0) {
+    return `${m}m ${remS}s`;
+  }
+  return `${remS}s`;
+}
+
 async function startRender() {
   if (!currentJob) return;
 
@@ -423,7 +463,14 @@ async function startRender() {
   document.getElementById("progress").style.width = "0%";
   document.getElementById("progress-pct").innerText = "0.0%";
   document.getElementById("progress-text").innerText = "Initializing ffmpeg pipeline...";
+  document.getElementById("render-stage-text").innerText = "Multi-stage filtering & encoding in progress";
   document.getElementById("render-err").innerText = "";
+  document.getElementById("stat-frames-done").innerText = "0";
+  document.getElementById("stat-total-frames").innerText = "--";
+  document.getElementById("stat-total-time").innerText = "Estimating...";
+  document.getElementById("stat-eta").innerText = "Calculating...";
+  document.getElementById("stat-fps").innerText = "-- fps";
+  document.getElementById("render-elapsed-text").innerText = "Elapsed: 0s";
   renderCard.scrollIntoView({ behavior: 'smooth' });
 
   const fd = new FormData();
@@ -434,28 +481,81 @@ async function startRender() {
 
   await fetch("/render", { method: "POST", body: fd });
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(checkStatus, 800);
+  pollTimer = setInterval(checkStatus, 500);
 }
 
 async function checkStatus() {
   if (!currentJob) return;
   try {
     const res = await fetch(`/status/${currentJob}`);
+    if (!res.ok) {
+      if (res.status === 404) {
+        console.warn("Job not found, retrying...");
+      }
+      return;
+    }
     const data = await res.json();
 
     if (data.status === "rendering") {
       const p = Number(data.progress || 0).toFixed(1);
       document.getElementById("progress").style.width = `${p}%`;
       document.getElementById("progress-pct").innerText = `${p}%`;
-      if (p < 25) {
-        document.getElementById("progress-text").innerText = `Stage 1/2: Analyzing & motion stabilization (${p}%)`;
+
+      if (data.stage) {
+        document.getElementById("render-stage-text").innerText = data.stage;
+      } else if (p < 25) {
+        document.getElementById("render-stage-text").innerText = `Stage 1/2: Analyzing & motion stabilization (${p}%)`;
       } else {
-        document.getElementById("progress-text").innerText = `Stage 2/2: Deblock, denoise, tonal & sharpening (${p}%)`;
+        document.getElementById("render-stage-text").innerText = `Stage 2/2: Deblock, denoise, tonal & sharpening (${p}%)`;
+      }
+
+      const framesDone = data.frames_done !== undefined ? data.frames_done : 0;
+      const totalFrames = data.total_frames !== undefined ? data.total_frames : 0;
+      document.getElementById("stat-frames-done").innerText = framesDone.toLocaleString();
+      document.getElementById("stat-total-frames").innerText = totalFrames > 0 ? totalFrames.toLocaleString() : "--";
+
+      if (data.total_time && data.total_time > 0) {
+        document.getElementById("stat-total-time").innerText = formatTime(data.total_time);
+      } else {
+        document.getElementById("stat-total-time").innerText = "Estimating...";
+      }
+
+      if (data.eta !== undefined && data.eta > 0) {
+        document.getElementById("stat-eta").innerText = formatTime(data.eta);
+      } else if (p >= 99.0) {
+        document.getElementById("stat-eta").innerText = "Finishing...";
+      } else {
+        document.getElementById("stat-eta").innerText = "Calculating...";
+      }
+
+      if (data.fps && data.fps > 0) {
+        document.getElementById("stat-fps").innerText = `${data.fps.toFixed(1)} fps`;
+      } else {
+        document.getElementById("stat-fps").innerText = "-- fps";
+      }
+
+      if (data.elapsed_time !== undefined && data.elapsed_time > 0) {
+        document.getElementById("render-elapsed-text").innerText = `Elapsed: ${formatTime(data.elapsed_time)}`;
+      }
+
+      if (totalFrames > 0) {
+        document.getElementById("progress-text").innerText = `Processing frame ${framesDone.toLocaleString()} of ${totalFrames.toLocaleString()}`;
+      } else {
+        document.getElementById("progress-text").innerText = "Executing ffmpeg filter pipeline...";
       }
     } else if (data.status === "done") {
       clearInterval(pollTimer);
       document.getElementById("progress").style.width = "100%";
       document.getElementById("progress-pct").innerText = "100.0%";
+      const totalFrames = data.total_frames !== undefined ? data.total_frames : 0;
+      document.getElementById("stat-frames-done").innerText = (data.frames_done || totalFrames).toLocaleString();
+      document.getElementById("stat-total-frames").innerText = totalFrames > 0 ? totalFrames.toLocaleString() : "--";
+      if (data.total_time) {
+        document.getElementById("stat-total-time").innerText = formatTime(data.total_time);
+      }
+      document.getElementById("stat-eta").innerText = "0s";
+      document.getElementById("render-stage-text").innerText = "Restoration complete!";
+
       setTimeout(() => {
         document.getElementById("step-render").style.display = "none";
         document.getElementById("step-result").style.display = "block";

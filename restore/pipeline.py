@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -22,6 +24,63 @@ from .probe import MediaInfo, probe
 
 class FFmpegError(RuntimeError):
     pass
+
+
+class ProgressInfo(float):
+    frames_done: int
+    total_frames: int
+    fps: float
+    elapsed_time: float
+    total_time: float
+    eta: float
+    stage: str
+
+    def __new__(
+        cls,
+        pct: float,
+        frames_done: int = 0,
+        total_frames: int = 0,
+        fps: float = 0.0,
+        elapsed_time: float = 0.0,
+        total_time: float = 0.0,
+        eta: float = 0.0,
+        stage: str = "",
+    ) -> ProgressInfo:
+        obj = super().__new__(cls, pct)
+        obj.frames_done = frames_done
+        obj.total_frames = total_frames
+        obj.fps = fps
+        obj.elapsed_time = elapsed_time
+        obj.total_time = total_time
+        obj.eta = eta
+        obj.stage = stage
+        return obj
+
+    @property
+    def pct(self) -> float:
+        return float(self)
+
+
+def _call_progress(cb: Callable[..., None] | None, info: ProgressInfo) -> None:
+    if cb is None:
+        return
+    try:
+        cb(info)
+    except TypeError:
+        try:
+            cb(float(info))
+        except Exception:
+            pass
+
+
+def _drain_stderr(pipe: Any, buffer: list[str]) -> None:
+    try:
+        for line in pipe:
+            buffer.append(line)
+            if len(buffer) > 200:
+                buffer.pop(0)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -229,7 +288,8 @@ def stabilize_pass(
     info: MediaInfo,
     trf: Path,
     duration: float | None = None,
-    progress_callback: Callable[[float], None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    start_time: float | None = None,
 ) -> None:
     if not has_vidstab():
         raise MissingCapability("libvidstab not available; rebuild ffmpeg")
@@ -240,21 +300,69 @@ def stabilize_pass(
         "-i", str(info.path),
         "-vf", f"vidstabdetect=shakiness=8:accuracy=15:result={trf}",
     ]
+    eff_dur = duration or max(info.duration, 0.01)
+    pass_total_frames = max(1, int(round(eff_dur * info.fps)))
+    t0 = start_time if start_time is not None else time.time()
+
     if progress_callback:
-        cmd += ["-progress", "pipe:1", "-nostats", "-f", "null", "-"]
+        cmd += ["-stats_period", "0.25", "-progress", "pipe:1", "-nostats", "-f", "null", "-"]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         assert proc.stdout is not None
-        eff_dur = duration or max(info.duration, 0.01)
-        for line in proc.stdout:
-            if line.startswith("out_time_us="):
-                us = line.strip().split("=")[1]
-                if us.isdigit():
-                    pct = min(100.0, int(us) / 1e6 / eff_dur * 100)
-                    progress_callback(pct)
+        assert proc.stderr is not None
+        stderr_buf: list[str] = []
+        err_thread = threading.Thread(target=_drain_stderr, args=(proc.stderr, stderr_buf), daemon=True)
+        err_thread.start()
+
+        cur_frame = 0
+        cur_fps = 0.0
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith("frame="):
+                val = line.split("=")[1].strip()
+                if val.isdigit():
+                    cur_frame = int(val)
+            elif line.startswith("fps="):
+                try:
+                    cur_fps = float(line.split("=")[1].strip())
+                except ValueError:
+                    pass
+            elif line.startswith("progress=") or line.startswith("out_time_us="):
+                now = time.time()
+                elapsed = now - t0
+                frames_done = min(cur_frame, pass_total_frames)
+                pass_pct = min(100.0, (frames_done / pass_total_frames) * 100.0)
+                overall_pct = pass_pct * 0.25
+                if overall_pct > 0.5 and elapsed > 0.5:
+                    est_total = elapsed / (overall_pct / 100.0)
+                    eta = max(0.0, est_total - elapsed)
+                elif cur_fps > 0:
+                    est_pass1 = pass_total_frames / cur_fps
+                    est_total = est_pass1 * 4.0
+                    eta = max(0.0, est_total - elapsed)
+                else:
+                    est_total = 0.0
+                    eta = 0.0
+
+                p_info = ProgressInfo(
+                    pct=overall_pct,
+                    frames_done=frames_done,
+                    total_frames=pass_total_frames,
+                    fps=cur_fps,
+                    elapsed_time=elapsed,
+                    total_time=est_total,
+                    eta=eta,
+                    stage="Analyzing motion (Pass 1/2)",
+                )
+                _call_progress(progress_callback, p_info)
+
         proc.wait()
+        err_thread.join(timeout=1.0)
         if proc.returncode != 0:
-            err = proc.stderr.read() if proc.stderr else ""
-            raise FFmpegError(err.strip().splitlines()[-1] if err else "vidstabdetect failed")
+            err = "".join(stderr_buf).strip().splitlines()[-1] if stderr_buf else "vidstabdetect failed"
+            raise FFmpegError(err)
     else:
         cmd += ["-f", "null", "-"]
         subprocess.run(cmd, capture_output=True, check=True)
@@ -336,12 +444,14 @@ def _render_single_unit(
     plan: Plan,
     info: MediaInfo,
     out_target: Path,
-    progress_callback: Callable[[float], None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    start_time: float | None = None,
 ) -> Path:
     require("atadenoise", "nlmeans", "deblock", "normalize", "cas", "unsharp")
 
     tmp_out = out_target.with_suffix(".part" + out_target.suffix)
     trf: Path | None = None
+    job_start_time = start_time if start_time is not None else time.time()
 
     if cfg.sample_duration is not None:
         effective_duration = cfg.sample_duration
@@ -349,6 +459,8 @@ def _render_single_unit(
         effective_duration = max(info.duration - cfg.sample_start, 0.01)
     else:
         effective_duration = max(info.duration, 0.01)
+
+    total_frames = max(1, int(round(effective_duration * info.fps)))
 
     try:
         cmd = _base(cfg)
@@ -362,11 +474,13 @@ def _render_single_unit(
             os.close(fd)
             trf = Path(name)
 
-            def on_stab_prog(p: float) -> None:
-                if progress_callback:
-                    progress_callback(p * 0.25)
-
-            stabilize_pass(info, trf, duration=cfg.sample_duration, progress_callback=on_stab_prog)
+            stabilize_pass(
+                info,
+                trf,
+                duration=cfg.sample_duration,
+                progress_callback=progress_callback,
+                start_time=job_start_time,
+            )
             trans_filt = f"vidstabtransform=input={trf}:smoothing=25:optzoom=2:interpol=bicubic"
             vf_parts.insert(0, trans_filt)
 
@@ -376,27 +490,103 @@ def _render_single_unit(
 
         cmd += _encoder_args(cfg)
         cmd += _audio_args(cfg, info, plan)
-        cmd += ["-progress", "pipe:1", "-nostats", str(tmp_out)]
+        cmd += ["-stats_period", "0.25", "-progress", "pipe:1", "-nostats", str(tmp_out)]
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         assert proc.stdout is not None
-        for line in proc.stdout:
-            if line.startswith("out_time_us="):
-                us = line.strip().split("=")[1]
-                if us.isdigit():
-                    render_pct = min(100.0, int(us) / 1e6 / effective_duration * 100)
-                    unit_p = (25.0 + render_pct * 0.75) if plan.stabilize else render_pct
-                    if progress_callback:
-                        progress_callback(unit_p)
-                    else:
-                        print(f"\r  {unit_p:5.1f}%", end="", flush=True)
+        assert proc.stderr is not None
+        stderr_buf: list[str] = []
+        err_thread = threading.Thread(target=_drain_stderr, args=(proc.stderr, stderr_buf), daemon=True)
+        err_thread.start()
+
+        cur_frame = 0
+        cur_fps = 0.0
+        cur_out_time_us: int | None = None
+
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith("frame="):
+                val = line.split("=")[1].strip()
+                if val.isdigit():
+                    cur_frame = int(val)
+            elif line.startswith("fps="):
+                try:
+                    cur_fps = float(line.split("=")[1].strip())
+                except ValueError:
+                    pass
+            elif line.startswith("out_time_us="):
+                val = line.split("=")[1].strip()
+                if val.isdigit():
+                    cur_out_time_us = int(val)
+            elif line.startswith("progress="):
+                now = time.time()
+                elapsed = now - job_start_time
+                frames_done = min(cur_frame, total_frames)
+                frame_pct = (frames_done / total_frames) * 100.0 if total_frames > 0 else 0.0
+                time_pct = (cur_out_time_us / 1e6 / effective_duration) * 100.0 if cur_out_time_us is not None else 0.0
+                pass_pct = min(100.0, max(frame_pct, time_pct))
+
+                if plan.stabilize:
+                    overall_pct = min(99.9, 25.0 + pass_pct * 0.75)
+                    stage = "Restoration & encoding (Pass 2/2)"
+                else:
+                    overall_pct = min(99.9, pass_pct)
+                    stage = "Restoration & encoding"
+
+                if overall_pct > 0.5 and elapsed > 0.5:
+                    est_total = elapsed / (overall_pct / 100.0)
+                    eta = max(0.0, est_total - elapsed)
+                elif cur_fps > 0 and total_frames > 0:
+                    remaining_frames = max(0, total_frames - frames_done)
+                    eta = remaining_frames / cur_fps
+                    est_total = elapsed + eta
+                else:
+                    est_total = 0.0
+                    eta = 0.0
+
+                p_info = ProgressInfo(
+                    pct=overall_pct,
+                    frames_done=frames_done,
+                    total_frames=total_frames,
+                    fps=cur_fps,
+                    elapsed_time=elapsed,
+                    total_time=est_total,
+                    eta=eta,
+                    stage=stage,
+                )
+                if progress_callback:
+                    _call_progress(progress_callback, p_info)
+                else:
+                    time_str = f"ETA: {int(eta)}s" if eta > 0 else ""
+                    print(f"\r  {overall_pct:5.1f}% | Frame {frames_done}/{total_frames} | {cur_fps:.1f} fps {time_str}", end="", flush=True)
+
         proc.wait()
+        err_thread.join(timeout=1.0)
         if not progress_callback:
             print()
         if proc.returncode != 0:
-            err = proc.stderr.read() if proc.stderr else ""
+            err = "".join(stderr_buf).strip().splitlines()[-1] if stderr_buf else "ffmpeg failed"
             tmp_out.unlink(missing_ok=True)
-            raise FFmpegError(err.strip().splitlines()[-1] if err else "ffmpeg failed")
+            raise FFmpegError(err)
+
+        if progress_callback:
+            now = time.time()
+            elapsed = now - job_start_time
+            done_info = ProgressInfo(
+                pct=100.0,
+                frames_done=total_frames,
+                total_frames=total_frames,
+                fps=cur_fps,
+                elapsed_time=elapsed,
+                total_time=elapsed,
+                eta=0.0,
+                stage="Completed",
+            )
+            _call_progress(progress_callback, done_info)
+
         tmp_out.replace(out_target)
         return out_target
     finally:
@@ -408,7 +598,7 @@ def render(
     cfg: Config,
     plan: Plan,
     info: MediaInfo,
-    progress_callback: Callable[[float], None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> Path:
     chunk_sec = cfg.chunk_duration if cfg.chunk_duration is not None else 180.0
     should_chunk = (
@@ -458,6 +648,9 @@ def render(
 
     total_chunks = len(manifest.chunks)
     rendered_outputs: list[Path] = []
+    total_video_frames = max(1, int(round(info.duration * info.fps)))
+    completed_frames = 0
+    render_start_time = time.time()
 
     for item in manifest.chunks:
         idx = item["index"]
@@ -466,22 +659,48 @@ def render(
 
         if item.get("status") == "done" and c_out.exists() and c_out.stat().st_size > 0:
             rendered_outputs.append(c_out)
+            completed_frames += int(item.get("duration", chunk_sec) * info.fps)
             continue
 
         c_info = probe(c_src)
+        c_frames = max(1, int(round(c_info.duration * c_info.fps)))
+
         c_cfg = cfg.with_(source=c_src, output=c_out, sample_start=None, sample_duration=None)
 
-        def on_chunk_prog(p: float) -> None:
-            overall = ((idx + p / 100.0) / total_chunks) * 100.0
-            if progress_callback:
-                progress_callback(min(99.0, overall))
+        def on_chunk_prog(p: ProgressInfo | float) -> None:
+            chunk_f_done = p.frames_done if isinstance(p, ProgressInfo) else int((float(p) / 100.0) * c_frames)
+            overall_done = min(total_video_frames, completed_frames + chunk_f_done)
+            overall_pct = min(99.0, (overall_done / total_video_frames) * 100.0)
+            now = time.time()
+            elapsed = now - render_start_time
+            if overall_pct > 0.5 and elapsed > 0.5:
+                est_total = elapsed / (overall_pct / 100.0)
+                eta = max(0.0, est_total - elapsed)
             else:
-                print(f"\r  Chunk {idx+1}/{total_chunks} ({p:5.1f}%) -> Total: {overall:5.1f}%", end="", flush=True)
+                est_total = 0.0
+                eta = 0.0
+            fps_val = p.fps if isinstance(p, ProgressInfo) else 0.0
 
-        _render_single_unit(c_cfg, plan, c_info, c_out, progress_callback=on_chunk_prog)
+            p_info = ProgressInfo(
+                pct=overall_pct,
+                frames_done=overall_done,
+                total_frames=total_video_frames,
+                fps=fps_val,
+                elapsed_time=elapsed,
+                total_time=est_total,
+                eta=eta,
+                stage=f"Chunk {idx+1}/{total_chunks}: Restoration & encoding",
+            )
+            if progress_callback:
+                _call_progress(progress_callback, p_info)
+            else:
+                print(f"\r  Chunk {idx+1}/{total_chunks} | Total: {overall_pct:5.1f}% | Frame {overall_done}/{total_video_frames}", end="", flush=True)
+
+        _render_single_unit(c_cfg, plan, c_info, c_out, progress_callback=on_chunk_prog, start_time=render_start_time)
         item["status"] = "done"
         manifest.save(manifest_path)
         rendered_outputs.append(c_out)
+        completed_frames += c_frames
 
     if not progress_callback:
         print("\r  Stitching chunks...                                      ", end="", flush=True)
@@ -491,6 +710,20 @@ def render(
     if not cfg.keep_chunks:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    if not progress_callback:
+    if progress_callback:
+        now = time.time()
+        elapsed = now - render_start_time
+        final_info = ProgressInfo(
+            pct=100.0,
+            frames_done=total_video_frames,
+            total_frames=total_video_frames,
+            fps=0.0,
+            elapsed_time=elapsed,
+            total_time=elapsed,
+            eta=0.0,
+            stage="Completed",
+        )
+        _call_progress(progress_callback, final_info)
+    else:
         print("\r  100.0% [Complete]                                        ")
     return cfg.output
