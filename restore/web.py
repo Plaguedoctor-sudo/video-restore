@@ -111,7 +111,12 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
     }
 
 
-def _run_render_job(job_id: str, preset_name: str) -> None:
+def _run_render_job(
+    job_id: str,
+    preset_name: str,
+    screen_mode: bool = False,
+    audio_denoise: bool | None = None,
+) -> None:
     job = JOBS.get(job_id)
     if not job or not job.out or not job.profile:
         return
@@ -123,12 +128,33 @@ def _run_render_job(job_id: str, preset_name: str) -> None:
 
     try:
         info = probe(job.src)
-        plan = build_plan(job.profile, preset_name)
+        geom = crop = None
+        moire = bands = 0.0
+        if screen_mode:
+            from . import screen as scr
+            q = scr.detect(info)
+            if q is not None:
+                geom = q.as_filter()
+            moire = scr.moire_score(info)
+            bands = scr.band_score(info)
+
+        effective_audio = audio_denoise if audio_denoise is not None else (job.profile.hiss > 0.25)
+        plan = build_plan(
+            job.profile,
+            preset_name,
+            geometry=geom,
+            crop=crop,
+            moire=moire,
+            bands=bands,
+            audio_denoise=effective_audio,
+        )
         cfg = Config(
             source=job.src,
             output=job.out,
             preset=Preset(preset_name),
             force=True,
+            screen_mode=screen_mode,
+            audio_denoise=effective_audio,
             work_dir=job.src.parent / "staging",
         )
         render(cfg, plan, info, progress_callback=on_progress)
@@ -145,10 +171,14 @@ def do_render(
     background_tasks: BackgroundTasks,
     job: str = Form(...),
     preset: str = Form("standard"),
+    screen_mode: bool = Form(False),
+    audio_denoise: bool = Form(False),
 ) -> RenderResponse:
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Job not found")
-    background_tasks.add_task(_run_render_job, job, preset)
+    background_tasks.add_task(
+        _run_render_job, job, preset, screen_mode=screen_mode, audio_denoise=audio_denoise
+    )
     return {"status": "started", "job": job}
 
 

@@ -3,127 +3,313 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>video-restore</title>
+  <title>video-restore | Local Web Studio</title>
   <style>
     :root {
-      --bg: #0f1117;
-      --card: #181b24;
-      --border: #292e3d;
-      --text: #e1e7f5;
-      --muted: #8b95a8;
+      --bg: #0b0d13;
+      --card: #151821;
+      --card-hover: #1b1f2b;
+      --border: #242938;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
       --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.35);
       --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.3);
       --err: #ef4444;
     }
+    * { box-sizing: border-box; }
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      max-width: 900px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 980px;
       margin: 2rem auto;
       padding: 0 1.5rem;
+      line-height: 1.5;
     }
-    h1 { margin-bottom: 0.25rem; font-weight: 700; }
-    p.sub { color: var(--muted); margin-top: 0; margin-bottom: 1.5rem; }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1rem;
+    }
+    h1 {
+      margin: 0 0 0.4rem 0;
+      font-size: 1.85rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .badge-status {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.6rem;
+      background: #1e293b;
+      color: #38bdf8;
+      border: 1px solid #0284c7;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    p.sub { color: var(--muted); margin: 0; font-size: 0.95rem; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem;
+      border-radius: 10px;
+      padding: 1.5rem;
       margin-bottom: 1.5rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
     }
     .btn {
       background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 6px;
-      padding: 0.55rem 1.1rem;
+      padding: 0.65rem 1.25rem;
       font-weight: 600;
+      font-size: 0.95rem;
       cursor: pointer;
-      transition: opacity 0.15s;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
     }
-    .btn:hover { opacity: 0.88; }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn:hover {
+      background: #2563eb;
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+    .btn-preset {
+      background: #1e2330;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.2s;
+      flex: 1;
+      min-width: 150px;
+    }
+    .btn-preset:hover {
+      border-color: var(--accent);
+      background: var(--card-hover);
+    }
+    .btn-preset.active {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.12);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    .btn-preset strong { display: block; font-size: 0.95rem; margin-bottom: 0.2rem; }
+    .btn-preset span { font-size: 0.8rem; color: var(--muted); }
+    .preset-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin: 1rem 0;
+    }
+    .file-dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 2.2rem 1.5rem;
+      text-align: center;
+      background: rgba(255,255,255,0.015);
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .file-dropzone:hover { border-color: var(--accent); }
     pre {
-      background: #090a0f;
-      color: #38ef7d;
-      padding: 1rem;
+      background: #07090e;
+      color: #4ade80;
+      padding: 1.1rem;
       border-radius: 6px;
       overflow-x: auto;
       font-size: 13.5px;
+      border: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    /* Large Animated Progress Bar & Percentage Display */
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 0.5rem;
+    }
+    .progress-pct-badge {
+      font-size: 2.25rem;
+      font-weight: 800;
+      color: var(--success);
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 15px var(--success-glow);
     }
     .progress-bar-wrap {
       width: 100%;
-      height: 12px;
-      background: var(--border);
-      border-radius: 6px;
+      height: 20px;
+      background: #10141f;
+      border: 1px solid var(--border);
+      border-radius: 10px;
       overflow: hidden;
-      margin: 1rem 0;
+      margin: 0.75rem 0 1rem 0;
+      position: relative;
     }
     .progress-bar {
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, #3b82f6, #10b981);
-      transition: width 0.3s;
+      border-radius: 8px;
+      transition: width 0.35s ease;
+      box-shadow: 0 0 12px var(--success-glow);
     }
     .player-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 1rem;
+      gap: 1.25rem;
       margin-top: 1rem;
+    }
+    @media (max-width: 680px) {
+      .player-grid { grid-template-columns: 1fr; }
     }
     video {
       width: 100%;
       background: #000;
-      border-radius: 6px;
+      border-radius: 8px;
       border: 1px solid var(--border);
+      display: block;
     }
     .badge {
       display: inline-block;
       font-size: 11px;
       font-weight: 700;
-      padding: 2px 6px;
+      padding: 3px 8px;
       border-radius: 4px;
       background: var(--border);
       margin-bottom: 0.5rem;
+      letter-spacing: 0.05em;
+    }
+    .option-row {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .option-row label {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
-  <h1>video-restore</h1>
-  <p class="sub">Defect analysis, classical multi-stage filtering, and quality verification.</p>
+  <header>
+    <h1>video-restore <span class="badge-status">Local Engine: Active</span></h1>
+    <p class="sub">Classical multi-stage video enhancement: stabilization, spatial & temporal denoise, deblocking, and sharpening.</p>
+  </header>
 
-  <div class="card">
-    <label for="f"><strong>Select Video Clip:</strong></label><br><br>
-    <input type="file" id="f" accept="video/*">
-    <button class="btn" id="btn-up" onclick="uploadClip()">Analyze</button>
-  </div>
+  <!-- Step 1: Upload & Input -->
+  <div class="card" id="step-upload">
+    <h3 style="margin-top:0;">1. Select Input Video</h3>
+    <div class="file-dropzone" onclick="document.getElementById('f').click()">
+      <div style="font-size:1.8rem; margin-bottom:0.5rem;">📹</div>
+      <div id="drop-text" style="font-size:1.05rem; font-weight:600;">Click or Drop Video Clip Here</div>
+      <div style="color:var(--muted); font-size:0.85rem; margin-top:0.25rem;">Supports MP4, MOV, MKV, WebM</div>
+      <input type="file" id="f" accept="video/*" style="display:none;" onchange="onFileSelected()">
+    </div>
 
-  <div id="step-analyze" class="card" style="display:none;">
-    <h3>Defect Profile</h3>
-    <div id="meta" style="color:var(--muted); font-size:14px; margin-bottom:0.5rem;"></div>
-    <pre id="summary"></pre>
+    <!-- Upload Progress -->
+    <div id="upload-progress-card" style="display:none; margin-top:1.25rem;">
+      <div style="display:flex; justify-content:space-between; font-size:0.9rem; color:var(--muted); margin-bottom:0.3rem;">
+        <span id="upload-status-text">Uploading video...</span>
+        <span id="upload-pct-text">0%</span>
+      </div>
+      <div class="progress-bar-wrap" style="height:10px;">
+        <div id="upload-progress-bar" class="progress-bar" style="width:0%;"></div>
+      </div>
+    </div>
 
-    <div style="margin-top: 1rem;">
-      <strong>Select Preset to Render:</strong><br><br>
-      <button class="btn" onclick="startRender('preview')">Preview (~10-20 fps)</button>
-      <button class="btn" onclick="startRender('standard')">Standard (~4-8 fps)</button>
-      <button class="btn" onclick="startRender('max')">Max (~1-2 fps)</button>
+    <div style="margin-top:1.25rem; display:flex; justify-content:flex-end;">
+      <button class="btn" id="btn-up" onclick="uploadClip()" disabled>Analyze Clip</button>
     </div>
   </div>
 
+  <!-- Step 2: Defect Profile & Settings -->
+  <div id="step-analyze" class="card" style="display:none;">
+    <h3 style="margin-top:0;">2. Defect Analysis & Preset Selection</h3>
+    <div id="meta" style="color:var(--muted); font-size:14px; margin-bottom:0.75rem;"></div>
+    <pre id="summary"></pre>
+
+    <div style="margin-top:1.25rem;">
+      <strong>Select Processing Preset:</strong>
+      <div class="preset-group">
+        <button class="btn-preset active" data-preset="standard" onclick="selectPreset('standard')">
+          <strong>Standard</strong>
+          <span>Balanced denoise & deblock (~4-8 fps)</span>
+        </button>
+        <button class="btn-preset" data-preset="fast" onclick="selectPreset('fast')">
+          <strong>Fast</strong>
+          <span>Optimized multi-threaded pass (~8-15 fps)</span>
+        </button>
+        <button class="btn-preset" data-preset="preview" onclick="selectPreset('preview')">
+          <strong>Preview</strong>
+          <span>Lightweight quick check (~10-20 fps)</span>
+        </button>
+        <button class="btn-preset" data-preset="max" onclick="selectPreset('max')">
+          <strong>Max Quality</strong>
+          <span>Stacked nlmeans + fftdnoiz (~1-2 fps)</span>
+        </button>
+        <button class="btn-preset" data-preset="telegram" onclick="selectPreset('telegram')">
+          <strong>Telegram</strong>
+          <span>Deband + 4:2:0 chroma sharpening</span>
+        </button>
+      </div>
+
+      <div class="option-row">
+        <label>
+          <input type="checkbox" id="chk-screen">
+          Screen Recording Mode (Keystone & Moiré correction)
+        </label>
+        <label>
+          <input type="checkbox" id="chk-audio" checked>
+          Audio Hiss Filter (afftdn)
+        </label>
+      </div>
+
+      <div style="margin-top:1.5rem; display:flex; justify-content:flex-end;">
+        <button class="btn" style="background:#10b981; font-size:1rem; padding:0.75rem 1.5rem;" onclick="startRender()">
+          Start Restoration
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Real-Time Restoration Progress -->
   <div id="step-render" class="card" style="display:none;">
-    <h3 id="render-title">Restoring Video...</h3>
+    <div class="progress-header">
+      <div>
+        <h3 id="render-title" style="margin:0;">Restoring Video</h3>
+        <div id="progress-text" style="color:var(--muted); font-size:0.95rem; margin-top:0.3rem;">
+          Executing ffmpeg filter pipeline...
+        </div>
+      </div>
+      <div id="progress-pct" class="progress-pct-badge">0.0%</div>
+    </div>
+
     <div class="progress-bar-wrap">
       <div id="progress" class="progress-bar"></div>
     </div>
-    <div id="progress-text" style="color:var(--muted); font-size:14px;">Initializing ffmpeg pipeline...</div>
-    <div id="render-err" style="color:var(--err); margin-top:0.5rem;"></div>
+
+    <div id="render-sub" style="font-size:0.85rem; color:var(--muted); display:flex; justify-content:space-between;">
+      <span id="render-stage-text">Multi-stage filtering & encoding in progress</span>
+      <span>Live Pipeline Tracker</span>
+    </div>
+    <div id="render-err" style="color:var(--err); margin-top:0.75rem; font-weight:600;"></div>
   </div>
 
+  <!-- Step 4: Comparison & Download -->
   <div id="step-result" class="card" style="display:none;">
-    <h3>Restoration Complete</h3>
+    <h3 style="margin-top:0; color:#34d399;">Restoration Complete</h3>
     <div class="player-grid">
       <div>
         <span class="badge">ORIGINAL</span>
@@ -134,84 +320,169 @@
         <video id="v-rest" controls playsinline></video>
       </div>
     </div>
-    <div style="margin-top: 1rem;">
+    <div style="margin-top:1.25rem;">
       <pre id="report"></pre>
-      <a id="dl-link" class="btn" style="text-decoration:none; display:inline-block;" download>Download Restored MP4</a>
+      <div style="margin-top:1rem; display:flex; gap:1rem; align-items:center;">
+        <a id="dl-link" class="btn" style="text-decoration:none; background:#10b981; padding:0.75rem 1.4rem;" download>
+          ⬇ Download Restored Video
+        </a>
+        <button class="btn" style="background:var(--border);" onclick="resetWorkflow()">
+          Process Another Video
+        </button>
+      </div>
     </div>
   </div>
 
 <script>
 let currentJob = null;
 let pollTimer = null;
+let selectedPreset = 'standard';
 
-async function uploadClip() {
+function onFileSelected() {
+  const f = document.getElementById("f").files[0];
+  const btn = document.getElementById("btn-up");
+  const text = document.getElementById("drop-text");
+  if (f) {
+    text.innerText = `Selected: ${f.name} (${(f.size / (1024*1024)).toFixed(1)} MB)`;
+    btn.disabled = false;
+  }
+}
+
+function selectPreset(preset) {
+  selectedPreset = preset;
+  document.querySelectorAll('.btn-preset').forEach(b => {
+    b.classList.toggle('active', b.getAttribute('data-preset') === preset);
+  });
+}
+
+function uploadClip() {
   const f = document.getElementById("f").files[0];
   if (!f) return alert("Please select a video file first.");
+
   const btn = document.getElementById("btn-up");
+  const progCard = document.getElementById("upload-progress-card");
+  const progBar = document.getElementById("upload-progress-bar");
+  const pctText = document.getElementById("upload-pct-text");
+
   btn.disabled = true;
-  btn.innerText = "Analyzing...";
+  progCard.style.display = "block";
+  progBar.style.width = "0%";
+  pctText.innerText = "0%";
 
   const fd = new FormData();
   fd.append("file", f);
 
-  try {
-    const res = await fetch("/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    currentJob = data.job;
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/upload");
 
-    document.getElementById("meta").innerText =
-      `${data.info.width}x${data.info.height} @ ${data.info.fps} fps | Duration: ${data.info.duration}s | Audio: ${data.info.has_audio ? "Yes" : "No"}`;
-    document.getElementById("summary").innerText = data.summary;
-    document.getElementById("step-analyze").style.display = "block";
-    document.getElementById("step-result").style.display = "none";
-  } catch (err) {
-    alert("Analysis failed: " + err.message);
-  } finally {
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      progBar.style.width = pct + "%";
+      pctText.innerText = pct + "%";
+      if (pct >= 100) {
+        document.getElementById("upload-status-text").innerText = "Analyzing video defect profile...";
+      }
+    }
+  };
+
+  xhr.onload = () => {
+    progCard.style.display = "none";
     btn.disabled = false;
-    btn.innerText = "Analyze";
-  }
+    if (xhr.status >= 200 && xhr.status < 300) {
+      const data = JSON.parse(xhr.responseText);
+      currentJob = data.job;
+
+      document.getElementById("meta").innerText =
+        `${data.info.width}x${data.info.height} @ ${data.info.fps} fps | Duration: ${data.info.duration}s | Audio: ${data.info.has_audio ? "Yes" : "No"}`;
+      document.getElementById("summary").innerText = data.summary;
+      document.getElementById("step-analyze").style.display = "block";
+      document.getElementById("step-result").style.display = "none";
+      document.getElementById("step-analyze").scrollIntoView({ behavior: 'smooth' });
+    } else {
+      alert("Analysis failed: " + xhr.responseText);
+    }
+  };
+
+  xhr.onerror = () => {
+    progCard.style.display = "none";
+    btn.disabled = false;
+    alert("Network error occurred during upload.");
+  };
+
+  xhr.send(fd);
 }
 
-async function startRender(preset) {
+async function startRender() {
   if (!currentJob) return;
-  document.getElementById("step-render").style.display = "block";
+
+  const renderCard = document.getElementById("step-render");
+  renderCard.style.display = "block";
   document.getElementById("step-result").style.display = "none";
-  document.getElementById("render-title").innerText = `Restoring Video (${preset})...`;
+  document.getElementById("render-title").innerText = `Restoring Video (${selectedPreset.toUpperCase()})`;
   document.getElementById("progress").style.width = "0%";
-  document.getElementById("progress-text").innerText = "Executing ffmpeg filter pipeline...";
+  document.getElementById("progress-pct").innerText = "0.0%";
+  document.getElementById("progress-text").innerText = "Initializing ffmpeg pipeline...";
   document.getElementById("render-err").innerText = "";
+  renderCard.scrollIntoView({ behavior: 'smooth' });
 
   const fd = new FormData();
   fd.append("job", currentJob);
-  fd.append("preset", preset);
+  fd.append("preset", selectedPreset);
+  fd.append("screen_mode", document.getElementById("chk-screen").checked);
+  fd.append("audio_denoise", document.getElementById("chk-audio").checked);
 
   await fetch("/render", { method: "POST", body: fd });
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(checkStatus, 1000);
+  pollTimer = setInterval(checkStatus, 800);
 }
 
 async function checkStatus() {
   if (!currentJob) return;
-  const res = await fetch(`/status/${currentJob}`);
-  const data = await res.json();
+  try {
+    const res = await fetch(`/status/${currentJob}`);
+    const data = await res.json();
 
-  if (data.status === "rendering") {
-    document.getElementById("progress").style.width = `${data.progress}%`;
-    document.getElementById("progress-text").innerText = `Progress: ${data.progress}%`;
-  } else if (data.status === "done") {
-    clearInterval(pollTimer);
-    document.getElementById("step-render").style.display = "none";
-    document.getElementById("step-result").style.display = "block";
-
-    document.getElementById("v-orig").src = `/source/${currentJob}`;
-    document.getElementById("v-rest").src = `/download/${currentJob}`;
-    document.getElementById("dl-link").href = `/download/${currentJob}`;
-    document.getElementById("report").innerText = data.report || "SSIM: >0.92 (Clean)";
-  } else if (data.status === "failed") {
-    clearInterval(pollTimer);
-    document.getElementById("render-err").innerText = "Render failed: " + (data.error || "unknown error");
+    if (data.status === "rendering") {
+      const p = Number(data.progress || 0).toFixed(1);
+      document.getElementById("progress").style.width = `${p}%`;
+      document.getElementById("progress-pct").innerText = `${p}%`;
+      if (p < 25) {
+        document.getElementById("progress-text").innerText = `Stage 1/2: Analyzing & motion stabilization (${p}%)`;
+      } else {
+        document.getElementById("progress-text").innerText = `Stage 2/2: Deblock, denoise, tonal & sharpening (${p}%)`;
+      }
+    } else if (data.status === "done") {
+      clearInterval(pollTimer);
+      document.getElementById("progress").style.width = "100%";
+      document.getElementById("progress-pct").innerText = "100.0%";
+      setTimeout(() => {
+        document.getElementById("step-render").style.display = "none";
+        document.getElementById("step-result").style.display = "block";
+        document.getElementById("v-orig").src = `/source/${currentJob}`;
+        document.getElementById("v-rest").src = `/download/${currentJob}`;
+        document.getElementById("dl-link").href = `/download/${currentJob}`;
+        document.getElementById("report").innerText = data.report || "SSIM: >0.92 (Clean)";
+        document.getElementById("step-result").scrollIntoView({ behavior: 'smooth' });
+      }, 500);
+    } else if (data.status === "failed") {
+      clearInterval(pollTimer);
+      document.getElementById("render-err").innerText = "Restoration failed: " + (data.error || "unknown error");
+    }
+  } catch (err) {
+    console.warn("Polling status error:", err);
   }
+}
+
+function resetWorkflow() {
+  currentJob = null;
+  document.getElementById("f").value = "";
+  document.getElementById("drop-text").innerText = "Click or Drop Video Clip Here";
+  document.getElementById("btn-up").disabled = true;
+  document.getElementById("step-analyze").style.display = "none";
+  document.getElementById("step-render").style.display = "none";
+  document.getElementById("step-result").style.display = "none";
+  document.getElementById("step-upload").scrollIntoView({ behavior: 'smooth' });
 }
 </script>
 </body>
